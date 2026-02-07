@@ -55,7 +55,7 @@ bool tryServeFile(AsyncWebServerRequest *request, const String &path) {
 
   const char *contentType = getContentType(actualPath);
   AsyncWebServerResponse *response = request->beginResponse(
-      LittleFS, actualPath, contentType, true);
+      LittleFS, actualPath, contentType, false);
   if (isGzip) {
     response->addHeader("Content-Encoding", "gzip");
   }
@@ -80,6 +80,28 @@ void handleNotFound(AsyncWebServerRequest *request) {
   }
   request->send(404, "text/plain", "Not Found");
 }
+
+void handleRawCam(AsyncWebServerRequest *request) {
+  String actualPath = "/calibrate.jpg";
+  bool isGzip = false;
+
+  if (LittleFS.exists(actualPath + ".gz")) {
+    actualPath += ".gz";
+    isGzip = true;
+  } else if (!LittleFS.exists(actualPath)) {
+    request->send(404, "text/plain", "calibrate.jpg not found");
+    return;
+  }
+
+  const char *contentType = getContentType(actualPath);
+  AsyncWebServerResponse *response = request->beginResponse(
+      LittleFS, actualPath, contentType, false);
+  if (isGzip) {
+    response->addHeader("Content-Encoding", "gzip");
+  }
+  response->addHeader("Cache-Control", "no-cache");
+  request->send(response);
+}
 }  // namespace
 
 void setup() {
@@ -102,6 +124,7 @@ void setup() {
 
 
   server.on("/", HTTP_GET, handleRoot);
+  server.on("/rawcam", HTTP_GET, handleRawCam);
   server.onNotFound(handleNotFound);
   server.begin();
   Serial.println("HTTP server started");
