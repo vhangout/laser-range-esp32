@@ -86,23 +86,25 @@ void handleNotFound(AsyncWebServerRequest *request) {
 
 void handleRawCam(AsyncWebServerRequest *request) {
   String actualPath = "/calibrate.jpg";
-  bool isGzip = false;
-
-  if (LittleFS.exists(actualPath + ".gz")) {
-    actualPath += ".gz";
-    isGzip = true;
-  } else if (!LittleFS.exists(actualPath)) {
-    request->send(404, "text/plain", "calibrate.jpg not found");
-    return;
-  }
-
   const char *contentType = getContentType(actualPath);
   AsyncWebServerResponse *response = request->beginResponse(
       LittleFS, actualPath, contentType, false);
-  if (isGzip) {
-    response->addHeader("Content-Encoding", "gzip");
-  }
   response->addHeader("Cache-Control", "no-cache");
+  request->send(response);
+}
+
+void handlePrintTarget(AsyncWebServerRequest *request) {
+  const String filePath = "/print_target.pdf";
+  if (!LittleFS.exists(filePath)) {
+    request->send(404, "text/plain", "print_target.pdf not found");
+    return;
+  }
+
+  AsyncWebServerResponse *response = request->beginResponse(
+      LittleFS, filePath, "application/pdf", false);
+  response->addHeader("Content-Disposition",
+                      "attachment; filename=\"print_target.pdf\"");
+  response->addHeader("Cache-Control", "public, max-age=31536000, immutable");
   request->send(response);
 }
 
@@ -198,6 +200,7 @@ void setup() {
 
   server.on("/", HTTP_GET, handleRoot);
   server.on("/rawcam", HTTP_GET, handleRawCam);
+  server.on("/print_target", HTTP_GET, handlePrintTarget);
   server.on("/set-cal", HTTP_POST, handleSetCalRequest, nullptr, handleSetCalBody);
   server.onNotFound(handleNotFound);
   server.begin();
