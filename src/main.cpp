@@ -21,6 +21,8 @@ enum class WorkMode : uint8_t {
 volatile WorkMode g_mode = WorkMode::Idle;
 portMUX_TYPE g_modeMux = portMUX_INITIALIZER_UNLOCKED;
 TaskHandle_t g_workerTaskHandle = nullptr;
+uint32_t g_lastCalibrationRefreshMs = 0;
+bool g_useFirstCalibrationImage = true;
 
 constexpr BaseType_t kWorkerCore = (CONFIG_ARDUINO_RUNNING_CORE == 0) ? 1 : 0;
 
@@ -70,21 +72,46 @@ void broadcastMode() {
   ws.textAll(payload);
 }
 
+void resetCalibrationTracking() {
+  g_lastCalibrationRefreshMs = millis();
+}
+
+void processCalibrationTracking() {
+  const uint32_t nowMs = millis();
+  if (nowMs - g_lastCalibrationRefreshMs < 5000U) {
+    return;
+  }
+
+  g_lastCalibrationRefreshMs = nowMs;
+  ws.textAll("refresh");
+  Serial.println("Calibration: simulated camera movement, refresh sent");
+}
+
 void workerTask(void * /*parameter*/) {
+  WorkMode previousMode = getMode();
+  if (previousMode == WorkMode::Calibration) {
+    resetCalibrationTracking();
+  }
+
   for (;;) {
     const WorkMode mode = getMode();
+    if (mode != previousMode && mode == WorkMode::Calibration) {
+      resetCalibrationTracking();
+    }
 
     switch (mode) {
       case WorkMode::Idle:
         // TODO: Add idle mode processing here.
         break;
       case WorkMode::Calibration:
-        // TODO: Add calibration mode processing here.
+        processCalibrationTracking();
         break;
       case WorkMode::Working:
         // TODO: Add working mode processing here.
         break;
     }
+
+    previousMode = mode;
 
     vTaskDelay(pdMS_TO_TICKS(50));
   }
@@ -211,7 +238,14 @@ void handleNotFound(AsyncWebServerRequest *request) {
 }
 
 void handleRawCam(AsyncWebServerRequest *request) {
-  String actualPath = "/calibrate.jpg";
+  const String actualPath = g_useFirstCalibrationImage ? "/calibrate.jpg" : "/calibrate2.jpg";
+  g_useFirstCalibrationImage = !g_useFirstCalibrationImage;
+
+  if (!LittleFS.exists(actualPath)) {
+    request->send(404, "text/plain", actualPath + " not found");
+    return;
+  }
+
   const char *contentType = getContentType(actualPath);
   AsyncWebServerResponse *response = request->beginResponse(
       LittleFS, actualPath, contentType, false);
