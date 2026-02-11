@@ -3,11 +3,140 @@
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <WiFi.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 namespace {
 #include "secrets.h"
 
 AsyncWebServer server(80);
+AsyncWebSocket ws("/ws");
+
+enum class WorkMode : uint8_t {
+  Idle = 0,
+  Calibration = 1,
+  Working = 2,
+};
+
+volatile WorkMode g_mode = WorkMode::Idle;
+portMUX_TYPE g_modeMux = portMUX_INITIALIZER_UNLOCKED;
+TaskHandle_t g_workerTaskHandle = nullptr;
+
+constexpr BaseType_t kWorkerCore = (CONFIG_ARDUINO_RUNNING_CORE == 0) ? 1 : 0;
+
+const char *modeToString(const WorkMode mode) {
+  switch (mode) {
+    case WorkMode::Idle:
+      return "idle";
+    case WorkMode::Calibration:
+      return "calibration";
+    case WorkMode::Working:
+      return "working";
+  }
+  return "idle";
+}
+
+bool parseMode(const String &value, WorkMode &outMode) {
+  if (value == "idle") {
+    outMode = WorkMode::Idle;
+    return true;
+  }
+  if (value == "calibration") {
+    outMode = WorkMode::Calibration;
+    return true;
+  }
+  if (value == "working") {
+    outMode = WorkMode::Working;
+    return true;
+  }
+  return false;
+}
+
+void setMode(const WorkMode mode) {
+  portENTER_CRITICAL(&g_modeMux);
+  g_mode = mode;
+  portEXIT_CRITICAL(&g_modeMux);
+}
+
+WorkMode getMode() {
+  portENTER_CRITICAL(&g_modeMux);
+  const WorkMode currentMode = g_mode;
+  portEXIT_CRITICAL(&g_modeMux);
+  return currentMode;
+}
+
+void broadcastMode() {
+  const String payload = String("{\"mode\":\"") + modeToString(getMode()) + "\"}";
+  ws.textAll(payload);
+}
+
+void workerTask(void * /*parameter*/) {
+  for (;;) {
+    const WorkMode mode = getMode();
+
+    switch (mode) {
+      case WorkMode::Idle:
+        // TODO: Add idle mode processing here.
+        break;
+      case WorkMode::Calibration:
+        // TODO: Add calibration mode processing here.
+        break;
+      case WorkMode::Working:
+        // TODO: Add working mode processing here.
+        break;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(50));
+  }
+}
+
+void onWebSocketEvent(AsyncWebSocket *serverRef,
+                      AsyncWebSocketClient *client,
+                      AwsEventType type,
+                      void *arg,
+                      uint8_t *data,
+                      size_t len) {
+  (void)serverRef;
+
+  if (type == WS_EVT_CONNECT) {
+    Serial.printf("WS client #%u connected\n", client->id());
+    client->text(String("{\"mode\":\"") + modeToString(getMode()) + "\"}");
+    return;
+  }
+
+  if (type == WS_EVT_DISCONNECT) {
+    Serial.printf("WS client #%u disconnected\n", client->id());
+    return;
+  }
+
+  if (type != WS_EVT_DATA) {
+    return;
+  }
+
+  AwsFrameInfo *info = reinterpret_cast<AwsFrameInfo *>(arg);
+  if (!info->final || info->index != 0 || info->len != len || info->opcode != WS_TEXT) {
+    client->text("{\"error\":\"Only single text frames are supported\"}");
+    return;
+  }
+
+  String message;
+  message.reserve(len);
+  for (size_t i = 0; i < len; ++i) {
+    message += static_cast<char>(data[i]);
+  }
+  message.trim();
+  message.toLowerCase();
+
+  WorkMode nextMode = WorkMode::Idle;
+  if (!parseMode(message, nextMode)) {
+    client->text("{\"error\":\"Unknown mode. Use idle/calibration/working\"}");
+    return;
+  }
+
+  setMode(nextMode);
+  Serial.printf("Mode changed via WS to: %s\n", modeToString(nextMode));
+  broadcastMode();
+}
 
 const char *getContentType(const String &path) {
   if (path.endsWith(".txt") || path.endsWith(".txt.gz")) return "text/plain";
@@ -130,10 +259,22 @@ void setup() {
   server.on("/rawcam", HTTP_GET, handleRawCam);
   server.on("/print_target", HTTP_GET, handlePrintTarget);
   server.onNotFound(handleNotFound);
+  ws.onEvent(onWebSocketEvent);
+  server.addHandler(&ws);
   server.begin();
   Serial.println("HTTP server started");
+
+  xTaskCreatePinnedToCore(workerTask,
+                          "modeWorkerTask",
+                          4096,
+                          nullptr,
+                          1,
+                          &g_workerTaskHandle,
+                          kWorkerCore);
+  Serial.printf("Worker task started on core %d\n", kWorkerCore);
 }
 
 void loop() {
+  ws.cleanupClients();
   delay(10);
 }
