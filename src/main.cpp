@@ -5,6 +5,7 @@
 #include <WiFi.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include "camera_module.h"
 
 namespace {
 #include "secrets.h"
@@ -22,7 +23,8 @@ volatile WorkMode g_mode = WorkMode::Idle;
 portMUX_TYPE g_modeMux = portMUX_INITIALIZER_UNLOCKED;
 TaskHandle_t g_workerTaskHandle = nullptr;
 uint32_t g_lastCalibrationRefreshMs = 0;
-bool g_useFirstCalibrationImage = true;
+uint32_t g_lastTrackingBroadcastMs = 0;
+CameraModule g_camera;
 
 constexpr BaseType_t kWorkerCore = (CONFIG_ARDUINO_RUNNING_CORE == 0) ? 1 : 0;
 
@@ -74,17 +76,38 @@ void broadcastMode() {
 
 void resetCalibrationTracking() {
   g_lastCalibrationRefreshMs = millis();
+  g_lastTrackingBroadcastMs = millis();
 }
 
 void processCalibrationTracking() {
-  const uint32_t nowMs = millis();
-  if (nowMs - g_lastCalibrationRefreshMs < 5000U) {
+  CameraTrackingResult tracking;
+  if (!g_camera.updateTracking(tracking) || !tracking.hasFrame) {
     return;
   }
 
-  g_lastCalibrationRefreshMs = nowMs;
-  ws.textAll("refresh");
-  Serial.println("Calibration: simulated camera movement, refresh sent");
+  const uint32_t nowMs = millis();
+  if (tracking.cameraMoved && (nowMs - g_lastCalibrationRefreshMs >= 300U)) {
+    g_lastCalibrationRefreshMs = nowMs;
+    ws.textAll("refresh");
+    Serial.printf("Calibration refresh: dx=%.1f dy=%.1f rot=%.1f motion=%d%%/%d%%\n",
+                  tracking.shiftXPx,
+                  tracking.shiftYPx,
+                  tracking.rotationDeg,
+                  tracking.changedPixelPercent,
+                  tracking.changedBlockPercent);
+  }
+
+  if (nowMs - g_lastTrackingBroadcastMs >= 500U) {
+    g_lastTrackingBroadcastMs = nowMs;
+    const String payload = String("{\"tracking\":{") +
+                           "\"dx\":" + String(tracking.shiftXPx, 2) + "," +
+                           "\"dy\":" + String(tracking.shiftYPx, 2) + "," +
+                           "\"rot\":" + String(tracking.rotationDeg, 2) + "," +
+                           "\"motion\":" + String(tracking.motionDetected ? 1 : 0) + "," +
+                           "\"changed\":" + String(tracking.changedPixelPercent) +
+                           "}}";
+    ws.textAll(payload);
+  }
 }
 
 void workerTask(void * /*parameter*/) {
@@ -238,18 +261,19 @@ void handleNotFound(AsyncWebServerRequest *request) {
 }
 
 void handleRawCam(AsyncWebServerRequest *request) {
-  const String actualPath = g_useFirstCalibrationImage ? "/calibrate.jpg" : "/calibrate2.jpg";
-  g_useFirstCalibrationImage = !g_useFirstCalibrationImage;
-
-  if (!LittleFS.exists(actualPath)) {
-    request->send(404, "text/plain", actualPath + " not found");
+  uint8_t *jpegData = nullptr;
+  size_t jpegLen = 0;
+  if (!g_camera.capturePreviewJpeg(jpegData, jpegLen) || jpegData == nullptr || jpegLen == 0) {
+    request->send(500, "text/plain", "Camera preview capture failed");
     return;
   }
 
-  const char *contentType = getContentType(actualPath);
   AsyncWebServerResponse *response = request->beginResponse(
-      LittleFS, actualPath, contentType, false);
+      200, "image/jpeg", jpegData, jpegLen);
   response->addHeader("Cache-Control", "no-cache");
+  request->onDisconnect([jpegData]() {
+    free(jpegData);
+  });
   request->send(response);
 }
 
@@ -278,6 +302,10 @@ void setup() {
     Serial.println("LittleFS mount failed");
   } else {
     Serial.println("LittleFS mounted");
+  }
+
+  if (!g_camera.begin(CameraModule::Model::AiThinker)) {
+    Serial.println("Camera init failed, reboot required");
   }
 
   // WiFi.mode(WIFI_AP);
