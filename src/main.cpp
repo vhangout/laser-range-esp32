@@ -24,6 +24,8 @@ portMUX_TYPE g_modeMux = portMUX_INITIALIZER_UNLOCKED;
 TaskHandle_t g_workerTaskHandle = nullptr;
 uint32_t g_lastCalibrationRefreshMs = 0;
 uint32_t g_lastTrackingBroadcastMs = 0;
+uint32_t g_lastShotBroadcastMs = 0;
+bool g_shotDetectedLatch = false;
 CameraModule g_camera;
 
 constexpr BaseType_t kWorkerCore = (CONFIG_ARDUINO_RUNNING_CORE == 0) ? 1 : 0;
@@ -79,6 +81,11 @@ void resetCalibrationTracking() {
   g_lastTrackingBroadcastMs = millis();
 }
 
+void resetWorkingTracking() {
+  g_lastShotBroadcastMs = 0;
+  g_shotDetectedLatch = false;
+}
+
 void processCalibrationTracking() {
   CameraTrackingResult tracking;
   if (!g_camera.updateTracking(tracking) || !tracking.hasFrame) {
@@ -110,16 +117,51 @@ void processCalibrationTracking() {
   }
 }
 
+void processWorkingTracking() {
+  LaserShotResult shot;
+  if (!g_camera.detectLaserShot(shot) || !shot.hasFrame) {
+    return;
+  }
+
+  if (!shot.detected) {
+    g_shotDetectedLatch = false;
+    return;
+  }
+
+  const uint32_t nowMs = millis();
+  const bool cooldownPassed = (g_lastShotBroadcastMs == 0) || (nowMs - g_lastShotBroadcastMs >= 200U);
+  if (g_shotDetectedLatch || !cooldownPassed) {
+    return;
+  }
+
+  g_shotDetectedLatch = true;
+  g_lastShotBroadcastMs = nowMs;
+
+  const String payload = String("{\"shot\":{") +
+                         "\"x\":" + String(shot.x) + "," +
+                         "\"y\":" + String(shot.y) + "," +
+                         "\"intensity\":" + String(shot.intensity) +
+                         "}}";
+  ws.textAll(payload);
+  Serial.printf("Shot detected: x=%d y=%d intensity=%d\n", shot.x, shot.y, shot.intensity);
+}
+
 void workerTask(void * /*parameter*/) {
   WorkMode previousMode = getMode();
   if (previousMode == WorkMode::Calibration) {
     resetCalibrationTracking();
+  } else if (previousMode == WorkMode::Working) {
+    resetWorkingTracking();
   }
 
   for (;;) {
     const WorkMode mode = getMode();
-    if (mode != previousMode && mode == WorkMode::Calibration) {
-      resetCalibrationTracking();
+    if (mode != previousMode) {
+      if (mode == WorkMode::Calibration) {
+        resetCalibrationTracking();
+      } else if (mode == WorkMode::Working) {
+        resetWorkingTracking();
+      }
     }
 
     switch (mode) {
@@ -130,7 +172,7 @@ void workerTask(void * /*parameter*/) {
         processCalibrationTracking();
         break;
       case WorkMode::Working:
-        // TODO: Add working mode processing here.
+        processWorkingTracking();
         break;
     }
 

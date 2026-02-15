@@ -26,6 +26,14 @@ constexpr float kRotationStepDeg = 2.0f;
 
 constexpr float kShiftMovedThresholdPx = 1.5f;
 constexpr float kRotationMovedThresholdDeg = 1.0f;
+
+constexpr int kLaserAbsoluteThreshold = 220;
+constexpr int kLaserRelativeThreshold = 45;
+constexpr int kLaserMinContrast = 30;
+constexpr int kLaserLocalRadiusPx = 3;
+constexpr int kLaserPixelSpread = 20;
+constexpr int kLaserMinBlobPixels = 1;
+constexpr int kLaserMaxBlobPixels = 30;
 }  // namespace
 
 CameraModule::CameraModule()
@@ -247,6 +255,66 @@ bool CameraModule::computeMotion(const uint8_t *current, CameraTrackingResult &r
   return true;
 }
 
+bool CameraModule::detectLaserPoint(const uint8_t *current, LaserShotResult &result) const {
+  int maxValue = 0;
+  int maxIdx = 0;
+  uint32_t sum = 0;
+  const int totalPixels = kFrameWidth * kFrameHeight;
+  for (int i = 0; i < totalPixels; ++i) {
+    const int value = current[i];
+    sum += static_cast<uint32_t>(value);
+    if (value > maxValue) {
+      maxValue = value;
+      maxIdx = i;
+    }
+  }
+
+  const int meanValue = static_cast<int>(sum / max(1, totalPixels));
+  const int threshold = max(kLaserAbsoluteThreshold, meanValue + kLaserRelativeThreshold);
+  if (maxValue < threshold) {
+    return true;
+  }
+
+  const int centerX = maxIdx % kFrameWidth;
+  const int centerY = maxIdx / kFrameWidth;
+
+  int blobCount = 0;
+  int blobSumX = 0;
+  int blobSumY = 0;
+  int neighborhoodSum = 0;
+  int neighborhoodCount = 0;
+  const int blobThreshold = max(threshold, maxValue - kLaserPixelSpread);
+
+  for (int y = max(0, centerY - kLaserLocalRadiusPx); y <= min(kFrameHeight - 1, centerY + kLaserLocalRadiusPx); ++y) {
+    for (int x = max(0, centerX - kLaserLocalRadiusPx); x <= min(kFrameWidth - 1, centerX + kLaserLocalRadiusPx); ++x) {
+      const int idx = y * kFrameWidth + x;
+      const int value = current[idx];
+      neighborhoodSum += value;
+      ++neighborhoodCount;
+      if (value >= blobThreshold) {
+        ++blobCount;
+        blobSumX += x;
+        blobSumY += y;
+      }
+    }
+  }
+
+  if (blobCount < kLaserMinBlobPixels || blobCount > kLaserMaxBlobPixels) {
+    return true;
+  }
+
+  const int neighborhoodMean = neighborhoodSum / max(1, neighborhoodCount);
+  if ((maxValue - neighborhoodMean) < kLaserMinContrast) {
+    return true;
+  }
+
+  result.detected = true;
+  result.x = blobSumX / blobCount;
+  result.y = blobSumY / blobCount;
+  result.intensity = maxValue;
+  return true;
+}
+
 float CameraModule::alignmentError(const uint8_t *current,
                                    const int dx,
                                    const int dy,
@@ -372,4 +440,37 @@ bool CameraModule::updateTracking(CameraTrackingResult &result) {
   esp_camera_fb_return(fb);
   xSemaphoreGive(cameraMutex_);
   return true;
+}
+
+bool CameraModule::detectLaserShot(LaserShotResult &result) {
+  result = LaserShotResult{};
+
+  if (!initialized_) {
+    return false;
+  }
+  if (cameraMutex_ == nullptr) {
+    return false;
+  }
+  if (xSemaphoreTake(cameraMutex_, pdMS_TO_TICKS(200)) != pdTRUE) {
+    return false;
+  }
+
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (fb == nullptr) {
+    xSemaphoreGive(cameraMutex_);
+    return false;
+  }
+
+  const size_t required = static_cast<size_t>(kFrameWidth) * static_cast<size_t>(kFrameHeight);
+  if (fb->len < required) {
+    esp_camera_fb_return(fb);
+    xSemaphoreGive(cameraMutex_);
+    return false;
+  }
+
+  result.hasFrame = true;
+  const bool ok = detectLaserPoint(fb->buf, result);
+  esp_camera_fb_return(fb);
+  xSemaphoreGive(cameraMutex_);
+  return ok;
 }

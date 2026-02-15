@@ -15,6 +15,14 @@ struct CameraTrackingResult {
   float rotationDeg = 0.0f;
 };
 
+struct LaserShotResult {
+  bool hasFrame = false;
+  bool detected = false;
+  int x = 0;
+  int y = 0;
+  int intensity = 0;
+};
+
 class CameraModule {
  public:
   enum class Model : uint8_t {
@@ -31,6 +39,7 @@ class CameraModule {
   bool begin(Model model = Model::AiThinker);
   bool capturePreviewJpeg(uint8_t *&jpegData, size_t &jpegLen);
   bool updateTracking(CameraTrackingResult &result);
+  bool detectLaserShot(LaserShotResult &result);
 
  private:
   struct CameraPins {
@@ -56,6 +65,7 @@ class CameraModule {
   bool configureSensor();
   bool ensurePrevFrame(size_t frameSize);
   bool computeMotion(const uint8_t *current, CameraTrackingResult &result);
+  bool detectLaserPoint(const uint8_t *current, LaserShotResult &result) const;
   void estimateShiftAndRotation(const uint8_t *current, CameraTrackingResult &result) const;
   float alignmentError(const uint8_t *current, int dx, int dy, float angleDeg) const;
 
