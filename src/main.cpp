@@ -319,6 +319,27 @@ void handleRawCam(AsyncWebServerRequest *request) {
   request->send(response);
 }
 
+void handleRawCamShot(AsyncWebServerRequest *request) {
+  uint8_t *jpegData = nullptr;
+  size_t jpegLen = 0;
+  uint32_t timestampMs = 0;
+  if (!g_camera.getLastShotJpegCopy(jpegData, jpegLen, timestampMs) ||
+      jpegData == nullptr ||
+      jpegLen == 0) {
+    request->send(404, "text/plain", "Shot frame buffer is empty");
+    return;
+  }
+
+  AsyncWebServerResponse *response = request->beginResponse(
+      200, "image/jpeg", jpegData, jpegLen);
+  response->addHeader("Cache-Control", "no-cache");
+  response->addHeader("X-Shot-Timestamp-Ms", String(timestampMs));
+  request->onDisconnect([jpegData]() {
+    free(jpegData);
+  });
+  request->send(response);
+}
+
 void handlePrintTarget(AsyncWebServerRequest *request) {
   const String filePath = "/print_target.pdf";
   if (!LittleFS.exists(filePath)) {
@@ -361,6 +382,7 @@ void setup() {
 
   server.on("/", HTTP_GET, handleRoot);
   server.on("/rawcam", HTTP_GET, handleRawCam);
+  server.on("/rawcamshot", HTTP_GET, handleRawCamShot);
   server.on("/print_target", HTTP_GET, handlePrintTarget);
   server.onNotFound(handleNotFound);
   ws.onEvent(onWebSocketEvent);
