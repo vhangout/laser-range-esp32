@@ -355,6 +355,15 @@ void handlePrintTarget(AsyncWebServerRequest *request) {
   request->send(response);
 }
 
+void handleCalibrationTable(AsyncWebServerRequest *request) {
+  AsyncWebServerResponse *response = request->beginResponse(
+      200,
+      "application/json",
+      g_camera.getCalibrationTableJson());
+  response->addHeader("Cache-Control", "no-cache");
+  request->send(response);
+}
+
 }  // namespace
 
 void setup() {
@@ -384,6 +393,7 @@ void setup() {
   server.on("/rawcam", HTTP_GET, handleRawCam);
   server.on("/rawcamshot", HTTP_GET, handleRawCamShot);
   server.on("/print_target", HTTP_GET, handlePrintTarget);
+  server.on("/api/calibration-table", HTTP_GET, handleCalibrationTable);
   server.onNotFound(handleNotFound);
   ws.onEvent(onWebSocketEvent);
   server.addHandler(&ws);

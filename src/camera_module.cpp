@@ -46,7 +46,20 @@ CameraModule::CameraModule()
       lastShotJpeg_(nullptr),
       lastShotJpegLen_(0),
       lastShotTimestampMs_(0),
-      hasLastShotFrame_(false) {}
+      hasLastShotFrame_(false),
+      calibrationTableJson_(R"json({
+  "undistort": {
+    "fx": 612.4,
+    "fy": 611.9,
+    "cx": 319.5,
+    "cy": 239.5,
+    "k1": -0.2874,
+    "k2": 0.0912,
+    "p1": 0.0008,
+    "p2": -0.0011,
+    "k3": -0.0123
+  }
+})json") {}
 
 CameraModule::~CameraModule() {
   if (prevFrame_ != nullptr) {
@@ -551,4 +564,8 @@ bool CameraModule::getLastShotJpegCopy(uint8_t *&jpegData, size_t &jpegLen, uint
   timestampMs = lastShotTimestampMs_;
   xSemaphoreGive(cameraMutex_);
   return true;
+}
+
+const String &CameraModule::getCalibrationTableJson() const {
+  return calibrationTableJson_;
 }
