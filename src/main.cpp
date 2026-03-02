@@ -312,7 +312,9 @@ void handleRawCam(AsyncWebServerRequest *request) {
 
   AsyncWebServerResponse *response = request->beginResponse(
       200, "image/jpeg", jpegData, jpegLen);
-  response->addHeader("Cache-Control", "no-cache");
+  response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  response->addHeader("Pragma", "no-cache");
+  response->addHeader("Expires", "0");
   request->onDisconnect([jpegData]() {
     free(jpegData);
   });
