@@ -6,9 +6,13 @@
 #include <img_converters.h>
 
 namespace {
-constexpr framesize_t kFrameSize = FRAMESIZE_QQVGA;
-constexpr int kFrameWidth = 160;
-constexpr int kFrameHeight = 120;
+// constexpr framesize_t kFrameSize = FRAMESIZE_240X240;
+// constexpr int kFrameWidth = 240;
+// constexpr int kFrameHeight = 240;
+
+constexpr framesize_t kFrameSize = FRAMESIZE_QVGA;
+constexpr int kFrameWidth = 320;
+constexpr int kFrameHeight = 240;
 
 constexpr int kPixelStep = 4;
 constexpr int kPixelDiffThreshold = 18;
@@ -42,13 +46,43 @@ CameraModule::CameraModule()
       prevFrame_(nullptr),
       prevFrameSize_(0),
       hasPrevFrame_(false),
-      motionConfirmCounter_(0) {}
+      motionConfirmCounter_(0),
+      lastShotJpeg_(nullptr),
+      lastShotJpegLen_(0),
+      lastShotTimestampMs_(0),
+      hasLastShotFrame_(false),
+      calibrationTableJson_(R"json({
+  "undistort": {
+    "fx": 278.71,
+    "fy": 290.83,
+    "cx": 160.0,
+    "cy": 120.0,
+    "k1": 0.04488807893823924,
+    "k2": -0.19776866412468266,
+    "p1": 0.0024189173811390067,
+    "p2": 0.004621474419755035,
+    "k3": 0.4168268583111075
+  }
+})json") {}
+
+// "undistort": {
+//     "fx": 302.81,
+//     "fy": 319.1,
+//     "cx": 160,
+//     "cy": 120,
+//     "k1": -0.010586821198783515,
+//     "k2": 0.2083039382265541,
+//     "p1": -0.0038391913680467303,
+//     "p2": -0.004210791720743154,
+//     "k3": -0.6721221781491317
+//   }
 
 CameraModule::~CameraModule() {
   if (prevFrame_ != nullptr) {
     free(prevFrame_);
     prevFrame_ = nullptr;
   }
+  clearLastShotFrame();
   if (cameraMutex_ != nullptr) {
     vSemaphoreDelete(cameraMutex_);
     cameraMutex_ = nullptr;
@@ -95,7 +129,7 @@ bool CameraModule::begin(const Model model) {
   config.pin_reset = pins.reset;
   config.xclk_freq_hz = 20000000;
   config.frame_size = kFrameSize;
-  config.pixel_format = PIXFORMAT_GRAYSCALE;
+  config.pixel_format = PIXFORMAT_GRAYSCALE; //PIXFORMAT_JPEG;
   config.grab_mode = CAMERA_GRAB_LATEST;
   config.fb_location = CAMERA_FB_IN_PSRAM;
   config.jpeg_quality = 12;
@@ -123,7 +157,24 @@ bool CameraModule::configureSensor() {
     return false;
   }
 
-  // Lock auto exposure/white balance to keep frame differencing stable.
+  // Use a neutral profile for ArUco/ChArUco detection from /rawcam.
+  // sensor->set_hmirror(sensor, 1);
+  // sensor->set_special_effect(sensor, 0);
+  // sensor->set_brightness(sensor, 0);
+  // sensor->set_contrast(sensor, 1);
+  // sensor->set_saturation(sensor, 0);
+  // sensor->set_sharpness(sensor, 2);
+
+  // Keep automatic controls enabled to avoid dark/noisy frames on ESP32-CAM.
+  // sensor->set_whitebal(sensor, 1);
+  // sensor->set_awb_gain(sensor, 1);
+  // sensor->set_exposure_ctrl(sensor, 1);
+  // sensor->set_aec2(sensor, 1);
+  // sensor->set_gain_ctrl(sensor, 1);
+  // sensor->set_ae_level(sensor, 0);
+
+    // Lock auto exposure/white balance to keep frame differencing stable.
+  sensor->set_hmirror(sensor, 1); // if needed
   sensor->set_whitebal(sensor, 0);
   sensor->set_awb_gain(sensor, 0);
   sensor->set_exposure_ctrl(sensor, 0);
@@ -315,6 +366,44 @@ bool CameraModule::detectLaserPoint(const uint8_t *current, LaserShotResult &res
   return true;
 }
 
+void CameraModule::clearLastShotFrame() {
+  if (lastShotJpeg_ != nullptr) {
+    free(lastShotJpeg_);
+    lastShotJpeg_ = nullptr;
+  }
+  lastShotJpegLen_ = 0;
+  lastShotTimestampMs_ = 0;
+  hasLastShotFrame_ = false;
+}
+
+bool CameraModule::storeShotFrameFromFb(camera_fb_t *fb) {
+  if (fb == nullptr) {
+    return false;
+  }
+
+  uint8_t *newJpeg = nullptr;
+  size_t newJpegLen = 0;
+  if (fb->format == PIXFORMAT_JPEG) {
+    newJpeg = static_cast<uint8_t *>(malloc(fb->len));
+    if (newJpeg == nullptr) {
+      return false;
+    }
+    memcpy(newJpeg, fb->buf, fb->len);
+    newJpegLen = fb->len;
+  } else {
+    if (!frame2jpg(fb, 80, &newJpeg, &newJpegLen) || newJpeg == nullptr || newJpegLen == 0) {
+      return false;
+    }
+  }
+
+  clearLastShotFrame();
+  lastShotJpeg_ = newJpeg;
+  lastShotJpegLen_ = newJpegLen;
+  lastShotTimestampMs_ = millis();
+  hasLastShotFrame_ = true;
+  return true;
+}
+
 float CameraModule::alignmentError(const uint8_t *current,
                                    const int dx,
                                    const int dy,
@@ -470,7 +559,46 @@ bool CameraModule::detectLaserShot(LaserShotResult &result) {
 
   result.hasFrame = true;
   const bool ok = detectLaserPoint(fb->buf, result);
+  if (ok && result.detected) {
+    storeShotFrameFromFb(fb);
+  }
   esp_camera_fb_return(fb);
   xSemaphoreGive(cameraMutex_);
   return ok;
+}
+
+bool CameraModule::getLastShotJpegCopy(uint8_t *&jpegData, size_t &jpegLen, uint32_t &timestampMs) {
+  jpegData = nullptr;
+  jpegLen = 0;
+  timestampMs = 0;
+
+  if (!initialized_) {
+    return false;
+  }
+  if (cameraMutex_ == nullptr) {
+    return false;
+  }
+  if (xSemaphoreTake(cameraMutex_, pdMS_TO_TICKS(200)) != pdTRUE) {
+    return false;
+  }
+  if (!hasLastShotFrame_ || lastShotJpeg_ == nullptr || lastShotJpegLen_ == 0) {
+    xSemaphoreGive(cameraMutex_);
+    return false;
+  }
+
+  jpegData = static_cast<uint8_t *>(malloc(lastShotJpegLen_));
+  if (jpegData == nullptr) {
+    xSemaphoreGive(cameraMutex_);
+    return false;
+  }
+
+  memcpy(jpegData, lastShotJpeg_, lastShotJpegLen_);
+  jpegLen = lastShotJpegLen_;
+  timestampMs = lastShotTimestampMs_;
+  xSemaphoreGive(cameraMutex_);
+  return true;
+}
+
+const String &CameraModule::getCalibrationTableJson() const {
+  return calibrationTableJson_;
 }

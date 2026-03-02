@@ -6,6 +6,7 @@ node_modules
 dist
 AGENTS.md
 index.html.gz
+.venv
 
 # local env files
 .env
