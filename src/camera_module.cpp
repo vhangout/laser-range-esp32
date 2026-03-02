@@ -6,6 +6,10 @@
 #include <img_converters.h>
 
 namespace {
+// constexpr framesize_t kFrameSize = FRAMESIZE_240X240;
+// constexpr int kFrameWidth = 240;
+// constexpr int kFrameHeight = 240;
+
 constexpr framesize_t kFrameSize = FRAMESIZE_QVGA;
 constexpr int kFrameWidth = 320;
 constexpr int kFrameHeight = 240;
@@ -49,17 +53,29 @@ CameraModule::CameraModule()
       hasLastShotFrame_(false),
       calibrationTableJson_(R"json({
   "undistort": {
-    "fx": 612.4,
-    "fy": 611.9,
-    "cx": 319.5,
-    "cy": 239.5,
-    "k1": -0.2874,
-    "k2": 0.0912,
-    "p1": 0.0008,
-    "p2": -0.0011,
-    "k3": -0.0123
+    "fx": 278.71,
+    "fy": 290.83,
+    "cx": 160.0,
+    "cy": 120.0,
+    "k1": 0.04488807893823924,
+    "k2": -0.19776866412468266,
+    "p1": 0.0024189173811390067,
+    "p2": 0.004621474419755035,
+    "k3": 0.4168268583111075
   }
 })json") {}
+
+// "undistort": {
+//     "fx": 302.81,
+//     "fy": 319.1,
+//     "cx": 160,
+//     "cy": 120,
+//     "k1": -0.010586821198783515,
+//     "k2": 0.2083039382265541,
+//     "p1": -0.0038391913680467303,
+//     "p2": -0.004210791720743154,
+//     "k3": -0.6721221781491317
+//   }
 
 CameraModule::~CameraModule() {
   if (prevFrame_ != nullptr) {
@@ -113,7 +129,7 @@ bool CameraModule::begin(const Model model) {
   config.pin_reset = pins.reset;
   config.xclk_freq_hz = 20000000;
   config.frame_size = kFrameSize;
-  config.pixel_format = PIXFORMAT_GRAYSCALE;
+  config.pixel_format = PIXFORMAT_GRAYSCALE; //PIXFORMAT_JPEG;
   config.grab_mode = CAMERA_GRAB_LATEST;
   config.fb_location = CAMERA_FB_IN_PSRAM;
   config.jpeg_quality = 12;
@@ -141,7 +157,24 @@ bool CameraModule::configureSensor() {
     return false;
   }
 
-  // Lock auto exposure/white balance to keep frame differencing stable.
+  // Use a neutral profile for ArUco/ChArUco detection from /rawcam.
+  // sensor->set_hmirror(sensor, 1);
+  // sensor->set_special_effect(sensor, 0);
+  // sensor->set_brightness(sensor, 0);
+  // sensor->set_contrast(sensor, 1);
+  // sensor->set_saturation(sensor, 0);
+  // sensor->set_sharpness(sensor, 2);
+
+  // Keep automatic controls enabled to avoid dark/noisy frames on ESP32-CAM.
+  // sensor->set_whitebal(sensor, 1);
+  // sensor->set_awb_gain(sensor, 1);
+  // sensor->set_exposure_ctrl(sensor, 1);
+  // sensor->set_aec2(sensor, 1);
+  // sensor->set_gain_ctrl(sensor, 1);
+  // sensor->set_ae_level(sensor, 0);
+
+    // Lock auto exposure/white balance to keep frame differencing stable.
+  sensor->set_hmirror(sensor, 1); // if needed
   sensor->set_whitebal(sensor, 0);
   sensor->set_awb_gain(sensor, 0);
   sensor->set_exposure_ctrl(sensor, 0);

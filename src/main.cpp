@@ -355,11 +355,15 @@ void handlePrintTarget(AsyncWebServerRequest *request) {
   request->send(response);
 }
 
-void handleCalibrationTable(AsyncWebServerRequest *request) {
+void handleCameraDistorsion(AsyncWebServerRequest *request) {
+  const String filePath = "/camera-distorsion.json";
+  if (!LittleFS.exists(filePath)) {
+    request->send(404, "text/plain", "camera-distorsion.json not found");
+    return;
+  }
+
   AsyncWebServerResponse *response = request->beginResponse(
-      200,
-      "application/json",
-      g_camera.getCalibrationTableJson());
+      LittleFS, filePath, "application/json", false);
   response->addHeader("Cache-Control", "no-cache");
   request->send(response);
 }
@@ -393,7 +397,7 @@ void setup() {
   server.on("/rawcam", HTTP_GET, handleRawCam);
   server.on("/rawcamshot", HTTP_GET, handleRawCamShot);
   server.on("/print_target", HTTP_GET, handlePrintTarget);
-  server.on("/api/calibration-table", HTTP_GET, handleCalibrationTable);
+  server.on("/camera-distorsion", HTTP_GET, handleCameraDistorsion);
   server.onNotFound(handleNotFound);
   ws.onEvent(onWebSocketEvent);
   server.addHandler(&ws);
