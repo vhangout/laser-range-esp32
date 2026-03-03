@@ -41,7 +41,7 @@ class CameraModule {
   bool updateTracking(CameraTrackingResult &result);
   bool detectLaserShot(LaserShotResult &result);
   bool getLastShotJpegCopy(uint8_t *&jpegData, size_t &jpegLen, uint32_t &timestampMs);
-  const String &getCalibrationTableJson() const;
+  bool setShotDetectionArea(int x1, int y1, int x2, int y2);
 
  private:
   struct CameraPins {
@@ -83,5 +83,9 @@ class CameraModule {
   size_t lastShotJpegLen_;
   uint32_t lastShotTimestampMs_;
   bool hasLastShotFrame_;
-  String calibrationTableJson_;
+  bool hasShotDetectionArea_;
+  int shotAreaMinX_;
+  int shotAreaMinY_;
+  int shotAreaMaxX_;
+  int shotAreaMaxY_;
 };

@@ -6,10 +6,6 @@
 #include <img_converters.h>
 
 namespace {
-// constexpr framesize_t kFrameSize = FRAMESIZE_240X240;
-// constexpr int kFrameWidth = 240;
-// constexpr int kFrameHeight = 240;
-
 constexpr framesize_t kFrameSize = FRAMESIZE_QVGA;
 constexpr int kFrameWidth = 320;
 constexpr int kFrameHeight = 240;
@@ -51,31 +47,11 @@ CameraModule::CameraModule()
       lastShotJpegLen_(0),
       lastShotTimestampMs_(0),
       hasLastShotFrame_(false),
-      calibrationTableJson_(R"json({
-  "undistort": {
-    "fx": 278.71,
-    "fy": 290.83,
-    "cx": 160.0,
-    "cy": 120.0,
-    "k1": 0.04488807893823924,
-    "k2": -0.19776866412468266,
-    "p1": 0.0024189173811390067,
-    "p2": 0.004621474419755035,
-    "k3": 0.4168268583111075
-  }
-})json") {}
-
-// "undistort": {
-//     "fx": 302.81,
-//     "fy": 319.1,
-//     "cx": 160,
-//     "cy": 120,
-//     "k1": -0.010586821198783515,
-//     "k2": 0.2083039382265541,
-//     "p1": -0.0038391913680467303,
-//     "p2": -0.004210791720743154,
-//     "k3": -0.6721221781491317
-//   }
+      hasShotDetectionArea_(false),
+      shotAreaMinX_(0),
+      shotAreaMinY_(0),
+      shotAreaMaxX_(kFrameWidth - 1),
+      shotAreaMaxY_(kFrameHeight - 1) {}
 
 CameraModule::~CameraModule() {
   if (prevFrame_ != nullptr) {
@@ -307,16 +283,38 @@ bool CameraModule::computeMotion(const uint8_t *current, CameraTrackingResult &r
 }
 
 bool CameraModule::detectLaserPoint(const uint8_t *current, LaserShotResult &result) const {
+  int roiMinX = 0;
+  int roiMinY = 0;
+  int roiMaxX = kFrameWidth - 1;
+  int roiMaxY = kFrameHeight - 1;
+  if (hasShotDetectionArea_) {
+    roiMinX = shotAreaMinX_;
+    roiMinY = shotAreaMinY_;
+    roiMaxX = shotAreaMaxX_;
+    roiMaxY = shotAreaMaxY_;
+  }
+
+  if (roiMinX < 0 || roiMinY < 0 || roiMaxX >= kFrameWidth || roiMaxY >= kFrameHeight ||
+      roiMinX > roiMaxX || roiMinY > roiMaxY) {
+    return false;
+  }
+
   int maxValue = 0;
-  int maxIdx = 0;
+  int maxX = roiMinX;
+  int maxY = roiMinY;
   uint32_t sum = 0;
-  const int totalPixels = kFrameWidth * kFrameHeight;
-  for (int i = 0; i < totalPixels; ++i) {
-    const int value = current[i];
-    sum += static_cast<uint32_t>(value);
-    if (value > maxValue) {
-      maxValue = value;
-      maxIdx = i;
+  int totalPixels = 0;
+  for (int y = roiMinY; y <= roiMaxY; ++y) {
+    const int rowOffset = y * kFrameWidth;
+    for (int x = roiMinX; x <= roiMaxX; ++x) {
+      const int value = current[rowOffset + x];
+      sum += static_cast<uint32_t>(value);
+      ++totalPixels;
+      if (value > maxValue) {
+        maxValue = value;
+        maxX = x;
+        maxY = y;
+      }
     }
   }
 
@@ -326,9 +324,6 @@ bool CameraModule::detectLaserPoint(const uint8_t *current, LaserShotResult &res
     return true;
   }
 
-  const int centerX = maxIdx % kFrameWidth;
-  const int centerY = maxIdx / kFrameWidth;
-
   int blobCount = 0;
   int blobSumX = 0;
   int blobSumY = 0;
@@ -336,8 +331,8 @@ bool CameraModule::detectLaserPoint(const uint8_t *current, LaserShotResult &res
   int neighborhoodCount = 0;
   const int blobThreshold = max(threshold, maxValue - kLaserPixelSpread);
 
-  for (int y = max(0, centerY - kLaserLocalRadiusPx); y <= min(kFrameHeight - 1, centerY + kLaserLocalRadiusPx); ++y) {
-    for (int x = max(0, centerX - kLaserLocalRadiusPx); x <= min(kFrameWidth - 1, centerX + kLaserLocalRadiusPx); ++x) {
+  for (int y = max(roiMinY, maxY - kLaserLocalRadiusPx); y <= min(roiMaxY, maxY + kLaserLocalRadiusPx); ++y) {
+    for (int x = max(roiMinX, maxX - kLaserLocalRadiusPx); x <= min(roiMaxX, maxX + kLaserLocalRadiusPx); ++x) {
       const int idx = y * kFrameWidth + x;
       const int value = current[idx];
       neighborhoodSum += value;
@@ -363,6 +358,27 @@ bool CameraModule::detectLaserPoint(const uint8_t *current, LaserShotResult &res
   result.x = blobSumX / blobCount;
   result.y = blobSumY / blobCount;
   result.intensity = maxValue;
+  return true;
+}
+
+bool CameraModule::setShotDetectionArea(int x1,
+                                        int y1,
+                                        int x2,
+                                        int y2) {
+  if (cameraMutex_ == nullptr) {
+    return false;
+  }
+  if (xSemaphoreTake(cameraMutex_, pdMS_TO_TICKS(200)) != pdTRUE) {
+    return false;
+  }  
+  
+  shotAreaMinX_ = x1;
+  shotAreaMinY_ = y1;
+  shotAreaMaxX_ = x2;
+  shotAreaMaxY_ = y2;
+  hasShotDetectionArea_ = true;
+
+  xSemaphoreGive(cameraMutex_);
   return true;
 }
 
@@ -599,6 +615,3 @@ bool CameraModule::getLastShotJpegCopy(uint8_t *&jpegData, size_t &jpegLen, uint
   return true;
 }
 
-const String &CameraModule::getCalibrationTableJson() const {
-  return calibrationTableJson_;
-}
