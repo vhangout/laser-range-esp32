@@ -43,10 +43,6 @@ CameraModule::CameraModule()
       prevFrameSize_(0),
       hasPrevFrame_(false),
       motionConfirmCounter_(0),
-      lastShotJpeg_(nullptr),
-      lastShotJpegLen_(0),
-      lastShotTimestampMs_(0),
-      hasLastShotFrame_(false),
       hasShotDetectionArea_(false),
       shotAreaMinX_(0),
       shotAreaMinY_(0),
@@ -58,7 +54,6 @@ CameraModule::~CameraModule() {
     free(prevFrame_);
     prevFrame_ = nullptr;
   }
-  clearLastShotFrame();
   if (cameraMutex_ != nullptr) {
     vSemaphoreDelete(cameraMutex_);
     cameraMutex_ = nullptr;
@@ -382,44 +377,6 @@ bool CameraModule::setShotDetectionArea(int x1,
   return true;
 }
 
-void CameraModule::clearLastShotFrame() {
-  if (lastShotJpeg_ != nullptr) {
-    free(lastShotJpeg_);
-    lastShotJpeg_ = nullptr;
-  }
-  lastShotJpegLen_ = 0;
-  lastShotTimestampMs_ = 0;
-  hasLastShotFrame_ = false;
-}
-
-bool CameraModule::storeShotFrameFromFb(camera_fb_t *fb) {
-  if (fb == nullptr) {
-    return false;
-  }
-
-  uint8_t *newJpeg = nullptr;
-  size_t newJpegLen = 0;
-  if (fb->format == PIXFORMAT_JPEG) {
-    newJpeg = static_cast<uint8_t *>(malloc(fb->len));
-    if (newJpeg == nullptr) {
-      return false;
-    }
-    memcpy(newJpeg, fb->buf, fb->len);
-    newJpegLen = fb->len;
-  } else {
-    if (!frame2jpg(fb, 80, &newJpeg, &newJpegLen) || newJpeg == nullptr || newJpegLen == 0) {
-      return false;
-    }
-  }
-
-  clearLastShotFrame();
-  lastShotJpeg_ = newJpeg;
-  lastShotJpegLen_ = newJpegLen;
-  lastShotTimestampMs_ = millis();
-  hasLastShotFrame_ = true;
-  return true;
-}
-
 float CameraModule::alignmentError(const uint8_t *current,
                                    const int dx,
                                    const int dy,
@@ -575,43 +532,8 @@ bool CameraModule::detectLaserShot(LaserShotResult &result) {
 
   result.hasFrame = true;
   const bool ok = detectLaserPoint(fb->buf, result);
-  if (ok && result.detected) {
-    storeShotFrameFromFb(fb);
-  }
   esp_camera_fb_return(fb);
   xSemaphoreGive(cameraMutex_);
   return ok;
-}
-
-bool CameraModule::getLastShotJpegCopy(uint8_t *&jpegData, size_t &jpegLen, uint32_t &timestampMs) {
-  jpegData = nullptr;
-  jpegLen = 0;
-  timestampMs = 0;
-
-  if (!initialized_) {
-    return false;
-  }
-  if (cameraMutex_ == nullptr) {
-    return false;
-  }
-  if (xSemaphoreTake(cameraMutex_, pdMS_TO_TICKS(200)) != pdTRUE) {
-    return false;
-  }
-  if (!hasLastShotFrame_ || lastShotJpeg_ == nullptr || lastShotJpegLen_ == 0) {
-    xSemaphoreGive(cameraMutex_);
-    return false;
-  }
-
-  jpegData = static_cast<uint8_t *>(malloc(lastShotJpegLen_));
-  if (jpegData == nullptr) {
-    xSemaphoreGive(cameraMutex_);
-    return false;
-  }
-
-  memcpy(jpegData, lastShotJpeg_, lastShotJpegLen_);
-  jpegLen = lastShotJpegLen_;
-  timestampMs = lastShotTimestampMs_;
-  xSemaphoreGive(cameraMutex_);
-  return true;
 }
 

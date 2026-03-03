@@ -40,7 +40,6 @@ class CameraModule {
   bool capturePreviewJpeg(uint8_t *&jpegData, size_t &jpegLen);
   bool updateTracking(CameraTrackingResult &result);
   bool detectLaserShot(LaserShotResult &result);
-  bool getLastShotJpegCopy(uint8_t *&jpegData, size_t &jpegLen, uint32_t &timestampMs);
   bool setShotDetectionArea(int x1, int y1, int x2, int y2);
 
  private:
@@ -68,8 +67,6 @@ class CameraModule {
   bool ensurePrevFrame(size_t frameSize);
   bool computeMotion(const uint8_t *current, CameraTrackingResult &result);
   bool detectLaserPoint(const uint8_t *current, LaserShotResult &result) const;
-  bool storeShotFrameFromFb(camera_fb_t *fb);
-  void clearLastShotFrame();
   void estimateShiftAndRotation(const uint8_t *current, CameraTrackingResult &result) const;
   float alignmentError(const uint8_t *current, int dx, int dy, float angleDeg) const;
 
@@ -79,10 +76,6 @@ class CameraModule {
   size_t prevFrameSize_;
   bool hasPrevFrame_;
   int motionConfirmCounter_;
-  uint8_t *lastShotJpeg_;
-  size_t lastShotJpegLen_;
-  uint32_t lastShotTimestampMs_;
-  bool hasLastShotFrame_;
   bool hasShotDetectionArea_;
   int shotAreaMinX_;
   int shotAreaMinY_;
